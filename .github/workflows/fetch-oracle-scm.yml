@@ -1,0 +1,59 @@
+name: Oracle SCM Readiness Fetch
+
+# Runs every Monday at 09:00 UTC. GitHub's cron scheduler can run a few
+# minutes late under load -- fine for a weekly job like this.
+# You can also trigger it manually from the Actions tab (workflow_dispatch).
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed so the workflow can commit data back to the repo
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Fetch structured feature data (Oracle's public API)
+        run: |
+          python fetch_readiness_api.py --updates 26A 26B 26C 26D --out ./data
+
+      - name: Diff against previous run
+        run: |
+          LATEST=$(ls ./data/scm_features_api_*.json | head -n 1)
+          if [ -f ./data/scm_features_prev.json ]; then
+            python diff_api_results.py \
+              --old ./data/scm_features_prev.json \
+              --new "$LATEST" \
+              --out ./data/new_features.json
+          else
+            echo "No previous baseline found -- this run establishes the baseline."
+          fi
+          cp "$LATEST" ./data/scm_features_prev.json
+
+      - name: Upload run output as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-scm-data
+          path: ./data/*
+
+      - name: Commit data back into the repo
+        run: |
+          git config user.name "oracle-scm-bot"
+          git config user.email "actions@github.com"
+          git add data/
+          git diff --cached --quiet || git commit -m "Fetch SCM readiness data"
+          git push
